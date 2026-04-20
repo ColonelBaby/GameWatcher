@@ -46,9 +46,11 @@ TEXTS = {
         "tab_pie": " 円グラフ ",
         "tab_bar": " 棒グラフ ",
         "label_no_data": "データがありません",
-        "unit_min": "分"
+        "unit_min": "分",
+        "menu_open": "統計を開く",
+        "menu_quit": "終了",
     },
-    "en": {
+    "en": { 
         "title": "GameWatcher",
         "tab_stats": " Stats ",
         "tab_settings": " Settings ",
@@ -69,19 +71,24 @@ TEXTS = {
         "tab_pie": " Pie Chart ",
         "tab_bar": " Bar Chart ",
         "label_no_data": "No Data",
-        "unit_min": "min"
+        "unit_min": "min",
+        "menu_open": "Open Stats",
+        "menu_quit": "Quit",
     }
 }
 
 def load_config():
-    default_config = {"aliases": {}, "language": "en", "first_run": True}
+    config = {"aliases": {}, "language": "en", "blacklist": [], "first_run": True}
+    
     if os.path.exists(config_path):
         try:
             with open(config_path, "r", encoding="utf-8") as f:
                 loaded_data = json.load(f)
-                return {**default_config, **loaded_data, "first_run": False}
-        except: pass
-    return default_config
+                config.update(loaded_data)
+                config["first_run"] = False
+        except:
+            pass        
+    return config
 
 def save_config(config):
     with open(config_path, "w", encoding="utf-8") as f:
@@ -185,7 +192,6 @@ class App:
         ttk.Button(self.tab_stats, text=TEXTS[self.lang]["btn_refresh"], command=self.refresh_ui).pack(pady=5)
 
     def create_day_content(self, parent):
-        """タブの中身（グラフ＋表）を作成する"""
         # グラフ
         canvas = tk.Canvas(parent, bg="#f8f9fa", height=350)
         canvas.pack(fill="both", expand=True, padx=10, pady=5)
@@ -206,7 +212,6 @@ class App:
         return tree, canvas
 
     def on_resize(self):
-        """画面サイズ変更時にグラフだけを再描画する"""
         if hasattr(self, "_resize_timer"):
             self.root.after_cancel(self._resize_timer)
         
@@ -252,7 +257,6 @@ class App:
             self.blacklist_box.insert(tk.END, item)
 
     def draw_graph(self, data):
-        """下段の選択されているタブに応じてグラフを描画する"""
         for widget in self.tab_pie.winfo_children(): widget.destroy()
         for widget in self.tab_bar.winfo_children(): widget.destroy()
 
@@ -261,20 +265,45 @@ class App:
             lbl.pack(expand=True)
             return
 
-        plot_data = sorted(data.items(), key=lambda x: x[1], reverse=True)[:8]
-        labels = [d[0] for d in plot_data]
-        values = [d[1] / 60 for d in plot_data]
+        sorted_items = sorted(data.items(), key=lambda x: x[1], reverse=True)
+        total_time = sum(data.values())
+        
+        labels = []
+        values = []
+        others_time = 0
+        
+        threshold = 0.05 
+        for name, duration in sorted_items:
+            if (duration / total_time) < threshold:
+                others_time += duration
+            else:
+                labels.append(name)
+                values.append(duration / 60)
+
+        if others_time > 0:
+            others_label = "Others" if self.lang == "en" else "その他"
+            labels.append(others_label)
+            values.append(others_time / 60)
 
         plt.rcParams['font.family'] = 'MS Gothic'
         selected_graph = self.graph_tabs.index(self.graph_tabs.select())
         fig, ax = plt.subplots(figsize=(5, 3), dpi=100)
 
         if selected_graph == 0:
-            ax.pie(values, labels=labels, autopct='%1.1f%%', startangle=90)
+            ax.pie(
+                values, 
+                labels=labels, 
+                autopct='%1.1f%%', 
+                startangle=90, 
+                counterclock=False, # 時計回りで直感的に
+                pctdistance=0.8,    # ％表示を少し外側に
+                labeldistance=1.1,  # アプリ名をさらに外側に
+                textprops={'fontsize': 9} # 文字を少し小さく
+            )
             ax.axis('equal')
             canvas = FigureCanvasTkAgg(fig, master=self.tab_pie)
         else:
-            ax.barh(labels, values, color='#4da6ff')
+            ax.barh(labels[:8][::-1], values[:8][::-1], color='#4da6ff')
             ax.set_xlabel(TEXTS[self.lang]["unit_min"])
             plt.tight_layout()
             canvas = FigureCanvasTkAgg(fig, master=self.tab_bar)
@@ -398,7 +427,7 @@ class App:
                     
                     display_name = self.config.get("aliases", {}).get(name_raw, 
                                    self.config.get("aliases", {}).get(clean_key, clean_key))
-                    
+
                     if name_raw in self.config.get("blacklist", []) or display_name in self.config.get("blacklist", []):
                         continue
 
@@ -409,6 +438,12 @@ class App:
                         actual_duration = (end - max(start, start_of_week)).total_seconds()
                         stats["total"][display_name] += actual_duration
                         stats[end.weekday()][display_name] += actual_duration
+
+            for key in stats:
+                items_to_remove = [name for name, total_sec in stats[key].items() if total_sec < 60]
+                for name in items_to_remove:
+                    del stats[key][name]
+
         except Exception as e:
             print(f"Error reading logs: {e}")
             
@@ -464,7 +499,6 @@ class App:
             print(f"Cleanup error: {e}")
 
     def update_status_indicator(self):
-        """backend.py が動いているか確認してランプを更新するだけにする"""
         heartbeat_path = os.path.join(appdata_dir, "heartbeat.txt")
         is_active = False
         
@@ -487,7 +521,6 @@ class App:
         self.after_id = self.root.after(5000, self.update_status_indicator)
 
     def is_autostart_enabled(self):
-        """現在レジストリに登録されているか確認する"""
         key_path = r"Software\Microsoft\Windows\CurrentVersion\Run"
         try:
             key = winreg.OpenKey(winreg.HKEY_CURRENT_USER, key_path, 0, winreg.KEY_READ)
