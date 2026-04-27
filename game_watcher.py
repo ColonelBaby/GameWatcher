@@ -11,7 +11,6 @@ import tkinter as tk
 from datetime import datetime
 from frontend import App, load_config, TEXTS
 
-# パス設定
 APPDATA_DIR = os.path.join(os.environ['APPDATA'], 'GameWatcher')
 if not os.path.exists(APPDATA_DIR):
     os.makedirs(APPDATA_DIR)
@@ -19,20 +18,17 @@ if not os.path.exists(APPDATA_DIR):
 LOCK_PATH = os.path.join(APPDATA_DIR, 'game_watcher.lock')
 BACKEND_LOCK = os.path.join(APPDATA_DIR, "backend.lock")
 
-# バックグラウンドプロセス判定
 if len(sys.argv) > 1 and sys.argv[1] == "--backend":
     from backend import main as run_backend
     run_backend()
     sys.exit()
 
-# 多重起動防止
 lock = FileLock(LOCK_PATH, timeout=1)
 try:
     lock.acquire()
 except:
     sys.exit()
 
-# 関数定義
 def get_resource_path(relative_path):
     base_path = getattr(sys, '_MEIPASS', os.path.dirname(os.path.abspath(__file__)))
     return os.path.join(base_path, relative_path)
@@ -66,22 +62,18 @@ def on_quit(icon, item):
     icon.stop()
     os._exit(0)
 
-# --- 4. メイン処理 ---
 if __name__ == "__main__":
-    # 設定から言語を取得
     config = load_config()
     lang = config.get("language", "ja")
 
     menu_open_label = "統計を開く" if lang == "ja" else "Open Statistics"
     menu_quit_label = "終了" if lang == "ja" else "Quit"
 
-    # アイコン画像読み込み
     try:
         icon_image = Image.open(get_resource_path("app_icon.png"))
     except:
         icon_image = Image.new('RGB', (64, 64), (40, 40, 40))
 
-    # トレイアイコンの設定
     icon = Icon("GameWatcher", icon_image, menu=Menu(
         MenuItem(menu_open_label, open_frontend),
         MenuItem(menu_quit_label, on_quit)

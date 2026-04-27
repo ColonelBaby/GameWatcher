@@ -231,47 +231,47 @@ class App:
         self.status_label.config(text="backend Inactive", fg="red")
 
     def refresh_ui(self):
-        weekly_data = self.get_week_data()
-        
+        stats = self.get_week_data()
         keys = ["total"] + list(range(7))
+        
         for k in keys:
             tree = self.day_trees[k]
             for item in tree.get_children(): tree.delete(item)
             
-            day_data = weekly_data[k]
-            sorted_data = sorted(day_data.items(), key=lambda x: x[1], reverse=True)
+            current_data = stats["total"] if k == "total" else stats["days"][k]
+            last_comp_data = stats["last_total"] if k == "total" else stats["last_days"][k]
+            
+            sorted_data = sorted(current_data.items(), key=lambda x: x[1], reverse=True)
             
             for name, sec_total in sorted_data:
-                sec = int(sec_total)
-                h, m = sec // 3600, (sec % 3600) // 60
-                time_str = f"{h}h {m}m" if self.lang == "en" else f"{h}時間 {m}分"
-                tree.insert("", tk.END, values=(name, time_str))
+                h, m = int(sec_total) // 3600, (int(sec_total) % 3600) // 60
+                time_str = f"{h}h {m}m"
+                
+                last_sec = last_comp_data.get(name, 0)
+                diff_sec = sec_total - last_sec
+                diff_m = int(abs(diff_sec)) // 60
+                
+                if last_sec == 0:
+                    diff_str = "NEW"
+                else:
+                    sign = "+" if diff_sec >= 0 else "-"
+                    diff_str = f"{sign}{diff_m}m"
+
+                tree.insert("", tk.END, values=(name, time_str, diff_str))
 
         current_tab_id = self.day_tabs.index(self.day_tabs.select())
-        target_key = "total" if current_tab_id == 0 else current_tab_id - 1
-        
-        self.draw_graph(weekly_data[target_key])
+        if current_tab_id == 0:
+            self.draw_graph(stats["total"], stats["last_total"])
+        else:
+            idx = current_tab_id - 1
+            self.draw_graph(stats["days"][idx], stats["last_days"][idx])
 
-        self.blacklist_box.delete(0, tk.END)
-        for item in self.config.get("blacklist", []):
-            self.blacklist_box.insert(tk.END, item)
-
-    def draw_graph(self, data):
-        for widget in self.tab_pie.winfo_children(): widget.destroy()
-        for widget in self.tab_bar.winfo_children(): widget.destroy()
-
-        if not data:
-            lbl = tk.Label(self.tab_pie, text=TEXTS[self.lang]["label_no_data"], fg="gray")
-            lbl.pack(expand=True)
-            return
-
-        sorted_items = sorted(data.items(), key=lambda x: x[1], reverse=True)
-        total_time = sum(data.values())
-        
-        labels = []
-        values = []
-        others_time = 0
-        
+    def _get_pie_data(self, data_dict):
+        """円グラフ用のラベルと値を整理する補助関数"""
+        if not data_dict: return [], []
+        sorted_items = sorted(data_dict.items(), key=lambda x: x[1], reverse=True)
+        total_time = sum(data_dict.values())
+        labels, values, others_time = [], [], 0
         threshold = 0.05 
         for name, duration in sorted_items:
             if (duration / total_time) < threshold:
@@ -279,32 +279,53 @@ class App:
             else:
                 labels.append(name)
                 values.append(duration / 60)
-
         if others_time > 0:
-            others_label = "Others" if self.lang == "en" else "その他"
-            labels.append(others_label)
+            labels.append("Others" if self.lang == "en" else "その他")
             values.append(others_time / 60)
+        return labels, values
+
+    def draw_graph(self, data, last_data=None):
+        for widget in self.tab_pie.winfo_children(): widget.destroy()
+        for widget in self.tab_bar.winfo_children(): widget.destroy()
+
+        if not data and not last_data:
+            tk.Label(self.tab_pie, text="No Data").pack(expand=True)
+            return
 
         plt.rcParams['font.family'] = 'MS Gothic'
         selected_graph = self.graph_tabs.index(self.graph_tabs.select())
-        fig, ax = plt.subplots(figsize=(5, 3), dpi=100)
 
         if selected_graph == 0:
-            ax.pie(
-                values, 
-                labels=labels, 
-                autopct='%1.1f%%', 
-                startangle=90, 
-                counterclock=False, # 時計回りで直感的に
-                pctdistance=0.8,    # ％表示を少し外側に
-                labeldistance=1.1,  # アプリ名をさらに外側に
-                textprops={'fontsize': 9} # 文字を少し小さく
-            )
-            ax.axis('equal')
+            fig, (ax1, ax2) = plt.subplots(1, 2, figsize=(10, 4), dpi=100)
+            
+            if last_data:
+                l_labels, l_vals = self._get_pie_data(last_data)
+                ax1.pie(l_vals, labels=l_labels, autopct='%1.1f%%', startangle=90, counterclock=False)
+                ax1.set_title("Last Week" if self.lang=="en" else "先週")
+            else:
+                ax1.text(0.5, 0.5, "No Data", ha='center')
+
+            if data:
+                c_labels, c_vals = self._get_pie_data(data)
+                ax2.pie(c_vals, labels=c_labels, autopct='%1.1f%%', startangle=90, counterclock=False)
+                ax2.set_title("This Week" if self.lang=="en" else "今週")
+            else:
+                ax2.text(0.5, 0.5, "No Data", ha='center')
+            
             canvas = FigureCanvasTkAgg(fig, master=self.tab_pie)
+
         else:
-            ax.barh(labels[:8][::-1], values[:8][::-1], color='#4da6ff')
-            ax.set_xlabel(TEXTS[self.lang]["unit_min"])
+            fig, ax = plt.subplots(figsize=(6, 4), dpi=100)
+            
+            all_apps = set(data.keys()) | set(last_data.keys() if last_data else [])
+            sorted_labels = sorted(all_apps, key=lambda x: data.get(x, 0) or (last_data.get(x, 0) if last_data else 0), reverse=True)[:8][::-1]
+            
+            if last_data:
+                ax.barh(sorted_labels, [last_data.get(l, 0)/60 for l in sorted_labels], color='gray', alpha=0.3, label="Last Week")
+            if data:
+                ax.barh(sorted_labels, [data.get(l, 0)/60 for l in sorted_labels], color='#4da6ff', alpha=0.7, label="This Week")
+            
+            ax.legend()
             plt.tight_layout()
             canvas = FigureCanvasTkAgg(fig, master=self.tab_bar)
 
@@ -312,7 +333,7 @@ class App:
         canvas.get_tk_widget().pack(fill="both", expand=True)
 
     def create_treeview(self, parent):
-        tree = ttk.Treeview(parent, columns=("Name", "Time"), show="headings")
+        tree = ttk.Treeview(parent, columns=("Name", "Time","Diff"), show="headings")
         tree.heading("Name", text=TEXTS[self.lang]["col_name"])
         tree.heading("Time", text=TEXTS[self.lang]["col_time"])
         tree.column("Name", width=400)
@@ -396,14 +417,19 @@ class App:
     def get_week_data(self):
         now = datetime.now()
         start_of_week = (now - timedelta(days=now.weekday())).replace(hour=0, minute=0, second=0, microsecond=0)
+        start_of_last_week = start_of_week - timedelta(days=7)
         limit_date = now - timedelta(days=31)
-        
-        stats = {k: defaultdict(float) for k in ["total"] + list(range(7))}
+
+        stats = {
+            "total": defaultdict(float),
+            "last_total": defaultdict(float),
+            "days": {i: defaultdict(float) for i in range(7)},
+            "last_days": {i: defaultdict(float) for i in range(7)}
+        }
         
         if not os.path.exists(log_path): return stats
         
         processed_logs = set()
-
         try:
             with open(log_path, "r", encoding="utf-8") as f:
                 for line in f:
@@ -412,8 +438,7 @@ class App:
                     name_raw, s_str, e_str = parts
                     
                     log_key = f"{name_raw}_{s_str}"
-                    if log_key in processed_logs:
-                        continue
+                    if log_key in processed_logs: continue
                     processed_logs.add(log_key)
 
                     try:
@@ -424,9 +449,7 @@ class App:
                     if end < limit_date: continue
 
                     clean_key = re.sub(r'(?i)\.exe$', '', name_raw).strip().lower()
-                    
-                    display_name = self.config.get("aliases", {}).get(name_raw, 
-                                   self.config.get("aliases", {}).get(clean_key, clean_key))
+                    display_name = self.config.get("aliases", {}).get(name_raw, clean_key)
 
                     if name_raw in self.config.get("blacklist", []) or display_name in self.config.get("blacklist", []):
                         continue
@@ -435,18 +458,25 @@ class App:
                     if duration <= 0: continue
 
                     if end >= start_of_week:
-                        actual_duration = (end - max(start, start_of_week)).total_seconds()
-                        stats["total"][display_name] += actual_duration
-                        stats[end.weekday()][display_name] += actual_duration
+                        actual_dur = (end - max(start, start_of_week)).total_seconds()
+                        stats["total"][display_name] += actual_dur
+                        stats["days"][end.weekday()][display_name] += actual_dur
+                    
+                    elif end >= start_of_last_week:
+                        actual_dur = (min(end, start_of_week) - max(start, start_of_last_week)).total_seconds()
+                        stats["last_total"][display_name] += actual_dur
+                        stats["last_days"][end.weekday()][display_name] += actual_dur
 
-            for key in stats:
-                items_to_remove = [name for name, total_sec in stats[key].items() if total_sec < 60]
-                for name in items_to_remove:
-                    del stats[key][name]
+            for d_set in [stats["total"], stats["last_total"]]:
+                to_del = [n for n, t in d_set.items() if t < 60]
+                for n in to_del: del d_set[n]
+            for d_map in [stats["days"], stats["last_days"]]:
+                for i in range(7):
+                    to_del = [n for n, t in d_map[i].items() if t < 60]
+                    for n in to_del: del d_map[i][n]
 
         except Exception as e:
-            print(f"Error reading logs: {e}")
-            
+            print(f"Error: {e}")
         return stats
 
     def rename_alias(self, event):
